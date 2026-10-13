@@ -1,0 +1,84 @@
+# POC #1 (ver /home/dione/.claude/plans/shimmering-puzzling-wave.md)
+# Instalação self-hosted do Typebot isolada, só para validar a API de
+# sessão (startChat/continueChat) e o fluxo de pergunta/menu. Não faz parte
+# do docker-compose "de produto" da plataforma (seção 16 do CLAUDE.md).
+#
+# Versão fixada: Typebot v3.19.0 (release oficial de 2026-09-14, confirmada
+# em https://github.com/baptisteArno/typebot.io/releases e nas tags do
+# Docker Hub de baptistearno/typebot-builder e typebot-viewer).
+
+x-typebot-common: &typebot-common
+  restart: unless-stopped
+  depends_on:
+    typebot-redis:
+      condition: service_healthy
+    typebot-db:
+      condition: service_healthy
+  networks:
+    - typebot-poc-network
+  env_file: .env
+  environment:
+    REDIS_URL: redis://typebot-redis:6379
+
+services:
+  typebot-db:
+    image: postgres:16
+    restart: unless-stopped
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_DB=typebot
+      - POSTGRES_PASSWORD=typebot
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - typebot-poc-network
+
+  typebot-redis:
+    image: redis:alpine
+    restart: unless-stopped
+    command: --save 60 1 --loglevel warning
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
+      start_period: 20s
+      interval: 30s
+      retries: 5
+      timeout: 3s
+    volumes:
+      - redis-data:/data
+    networks:
+      - typebot-poc-network
+
+  typebot-builder:
+    <<: *typebot-common
+    image: baptistearno/typebot-builder:3.19.0
+    ports:
+      - "8080:3000"
+
+  typebot-viewer:
+    <<: *typebot-common
+    image: baptistearno/typebot-viewer:3.19.0
+    ports:
+      - "8081:3000"
+
+  # SMTP descartável só para capturar o magic link de login do builder.
+  # UI web em http://localhost:8025
+  mailpit:
+    image: axllent/mailpit:latest
+    restart: unless-stopped
+    ports:
+      - "8025:8025"
+      - "1025:1025"
+    networks:
+      - typebot-poc-network
+
+networks:
+  typebot-poc-network:
+    driver: bridge
+
+volumes:
+  db-data:
+  redis-data:

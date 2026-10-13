@@ -1,0 +1,64 @@
+# Notas da POC #1 — Typebot self-hosted (validação de API)
+
+> Observações de uma execução real, não especificação. Alimenta as
+> pendências da seção 19 do CLAUDE.md. Plano original:
+> `/home/dione/.claude/plans/shimmering-puzzling-wave.md`.
+
+## Ambiente usado
+
+- Typebot **v3.19.0** (release oficial de 2026-09-14), imagens
+  `baptistearno/typebot-builder:3.19.0` e `baptistearno/typebot-viewer:3.19.0`.
+- O compose oficial atual **exige Redis** além do Postgres — não é opcional
+  como algumas fontes de terceiros sugeriam.
+- Login do builder via magic link; usamos Mailpit como SMTP descartável.
+
+## Armadilha encontrada
+
+- `SMTP_AUTH_DISABLED=true` **desativa o login por e-mail inteiro** (não é
+  "desativa só a autenticação SMTP para notificações", como o nome sugere).
+  Precisa ficar `false` para usar magic link de login.
+
+## Confirmado sobre a API
+
+- A **API de chat é servida pelo serviço `typebot-viewer`** (porta 8081 no
+  nosso compose), não pelo builder. `http://<viewer>/api/v1/...`.
+- `POST /api/v1/typebots/{publicId}/startChat` e
+  `POST /api/v1/sessions/{sessionId}/continueChat` funcionam exatamente como
+  a documentação descreve, autenticados com `Authorization: Bearer <token>`.
+- O token de API é criado em Configurações da conta → API tokens no builder;
+  fica salvo em texto puro na tabela `ApiToken` (sem hash).
+- **Resposta a bloco de escolha (`choice input`) usa o mesmo formato de texto
+  livre**: `{"message": {"type": "text", "text": "<content da opção>"}}`,
+  onde `<content>` é o texto exato do item escolhido. A documentação oficial
+  não confirmava isso explicitamente — testamos e funcionou.
+- Fluxo de 3 blocos (boas-vindas → input de texto → escolha → mensagem final)
+  validado de ponta a ponta via curl e depois via navegador.
+
+## Sobre reload sem perder sessão
+
+- Não identificamos um endpoint do Typebot para recuperar o histórico de uma
+  sessão existente a partir do zero. A solução usada na POC foi o **cliente
+  (Vue) cachear `sessionId` + transcript + input atual em `localStorage`** e
+  restaurar isso no mount, em vez de pedir ao Typebot. Funcionou no teste
+  manual (recarregar no meio da conversa manteve o histórico).
+- Isso é uma decisão de implementação do nosso frontend, não um recurso do
+  Typebot — vale manter esse padrão (cache local) nos módulos reais também,
+  a menos que se descubra uma API de histórico.
+
+## Explicitamente não testado aqui (fica para a POC #2)
+
+- Bloco **Webhook** do Typebot como mecanismo de retomada assíncrona sem nova
+  mensagem do consumidor (timeout padrão curto, comportamento relatado como
+  inconsistente em WhatsApp pela comunidade — não validamos nada disso
+  ainda).
+- Qualquer coisa envolvendo `bot_operations`, outbox, Centrifugo.
+
+## Infra usada (descartável, não é a infra de produto)
+
+- `infra/typebot-poc/docker-compose.yml` — isolado, não entra no compose da
+  seção 16 do CLAUDE.md.
+- Endpoints temporários em `src/modules/bot/infrastructure/typebot/typebot-poc.*`
+  — sem tenant/protocolo, só repassam para a API do Typebot. Substituir pelos
+  serviços reais (`BotOrchestratorService`, `TypebotProvider`) nas próximas
+  etapas.
+- Frontend em `apps/web-poc/` — protótipo, não é o SDK/chat final.
