@@ -37,13 +37,17 @@
 ## Sobre reload sem perder sessão
 
 - Não identificamos um endpoint do Typebot para recuperar o histórico de uma
-  sessão existente a partir do zero. A solução usada na POC foi o **cliente
-  (Vue) cachear `sessionId` + transcript + input atual em `localStorage`** e
-  restaurar isso no mount, em vez de pedir ao Typebot. Funcionou no teste
-  manual (recarregar no meio da conversa manteve o histórico).
-- Isso é uma decisão de implementação do nosso frontend, não um recurso do
-  Typebot — vale manter esse padrão (cache local) nos módulos reais também,
-  a menos que se descubra uma API de histórico.
+  sessão existente a partir do zero — então o Nest guarda esse histórico.
+- Decisão revisada após o primeiro teste: a versão inicial cacheava tudo em
+  `localStorage` no Vue, mas isso faz o cliente ser a fonte da verdade (quebra
+  entre abas/navegadores, e não é o padrão do resto do projeto). Trocamos
+  para: o Nest mantém um **store em memória do chat, endereçado por um UUID
+  próprio** (`chatId`, gerado com `crypto.randomUUID()`), distinto do
+  `sessionId` do Typebot. Esse `chatId` vai pra URL do Vue (`?chat=<uuid>`);
+  ao montar, o frontend busca `GET /poc/chats/:chatId` no Nest em vez de ler
+  `localStorage`. Isso já é mais parecido com o padrão real do projeto
+  (servidor como fonte da verdade), ainda que em memória — a persistência de
+  verdade em Postgres só vem na "Fundação persistente" (seção 18).
 
 ## Explicitamente não testado aqui (fica para a POC #2)
 
@@ -57,8 +61,11 @@
 
 - `infra/typebot-poc/docker-compose.yml` — isolado, não entra no compose da
   seção 16 do CLAUDE.md.
-- Endpoints temporários em `src/modules/bot/infrastructure/typebot/typebot-poc.*`
-  — sem tenant/protocolo, só repassam para a API do Typebot. Substituir pelos
+- Endpoints temporários em
+  `apps/api/src/modules/bot/infrastructure/typebot/typebot-poc.*`
+  — sem tenant/protocolo, store em memória (não Postgres). Substituir pelos
   serviços reais (`BotOrchestratorService`, `TypebotProvider`) nas próximas
   etapas.
 - Frontend em `apps/web-poc/` — protótipo, não é o SDK/chat final.
+- Estrutura movida para o padrão monorepo (`apps/api` + `apps/web-poc`) depois
+  da primeira versão, que tinha o Nest direto na raiz do repositório.
