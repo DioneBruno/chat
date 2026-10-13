@@ -4,10 +4,14 @@ import { onMounted, ref } from 'vue'
 /**
  * POC #1 — só renderiza o chat do Typebot via API própria do Nest.
  * Sem SDK definitivo, sem tenant/protocolo. Ver plano da POC.
+ *
+ * O Nest é a fonte da verdade do estado do chat, endereçado por um UUID
+ * (`chatId`) que fica na URL (?chat=<uuid>) — não usamos localStorage.
+ * Recarregar a página com a mesma URL busca o estado de novo no servidor.
  */
 
 const API_URL = 'http://localhost:3001'
-const STORAGE_KEY = 'typebot-poc-session'
+const CHAT_QUERY_PARAM = 'chat'
 
 type ChatMessage = { from: 'bot' | 'user'; text: string }
 type ChoiceItem = { id: string; content?: string }
@@ -16,71 +20,70 @@ type BotInput = {
   items?: ChoiceItem[]
   options?: { labels?: { placeholder?: string } }
 }
+type ChatStateDto = {
+  chatId: string
+  messages: ChatMessage[]
+  input: BotInput | null
+  isFinished: boolean
+}
 
-const sessionId = ref<string | null>(null)
+const chatId = ref<string | null>(null)
 const messages = ref<ChatMessage[]>([])
 const currentInput = ref<BotInput | null>(null)
 const textDraft = ref('')
 const isLoading = ref(false)
 const isFinished = ref(false)
 
-function extractBotText(message: any): string {
-  const content = message.content
-  if (content?.type === 'markdown') return content.markdown
-  if (content?.type === 'richText') {
-    return content.richText
-      .map((block: any) => (block.children ?? []).map((c: any) => c.text ?? '').join(''))
-      .join('\n')
-  }
-  return JSON.stringify(content)
+function applyState(state: ChatStateDto) {
+  chatId.value = state.chatId
+  messages.value = state.messages
+  currentInput.value = state.input
+  isFinished.value = state.isFinished
 }
 
-function persist() {
-  localStorage.setItem(
-    STORAGE_KEY,
-    JSON.stringify({
-      sessionId: sessionId.value,
-      messages: messages.value,
-      currentInput: currentInput.value,
-      isFinished: isFinished.value,
-    }),
-  )
+function setChatIdInUrl(id: string) {
+  const url = new URL(window.location.href)
+  url.searchParams.set(CHAT_QUERY_PARAM, id)
+  window.history.replaceState({}, '', url)
 }
 
-function applyTurnResult(result: any) {
-  for (const m of result.messages ?? []) {
-    messages.value.push({ from: 'bot', text: extractBotText(m) })
-  }
-  currentInput.value = result.input ?? null
-  isFinished.value = !result.input
-  persist()
-}
-
-async function start() {
+async function createChat() {
   isLoading.value = true
   try {
-    const res = await fetch(`${API_URL}/poc/typebot/start`, { method: 'POST' })
-    const result = await res.json()
-    sessionId.value = result.sessionId
-    applyTurnResult(result)
+    const res = await fetch(`${API_URL}/poc/chats`, { method: 'POST' })
+    const state = (await res.json()) as ChatStateDto
+    applyState(state)
+    setChatIdInUrl(state.chatId)
+  } finally {
+    isLoading.value = false
+  }
+}
+
+async function loadChat(id: string) {
+  isLoading.value = true
+  try {
+    const res = await fetch(`${API_URL}/poc/chats/${id}`)
+    if (!res.ok) {
+      // uuid na URL não existe no servidor (ex.: processo do Nest reiniciou) — começa um novo chat
+      await createChat()
+      return
+    }
+    applyState((await res.json()) as ChatStateDto)
   } finally {
     isLoading.value = false
   }
 }
 
 async function send(text: string) {
-  if (!sessionId.value || !text.trim()) return
-  messages.value.push({ from: 'user', text })
-  persist()
+  if (!chatId.value || !text.trim()) return
   isLoading.value = true
   try {
-    const res = await fetch(`${API_URL}/poc/typebot/continue`, {
+    const res = await fetch(`${API_URL}/poc/chats/${chatId.value}/messages`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sessionId: sessionId.value, text }),
+      body: JSON.stringify({ text }),
     })
-    const result = await res.json()
-    applyTurnResult(result)
+    applyState((await res.json()) as ChatStateDto)
   } finally {
     isLoading.value = false
   }
@@ -97,15 +100,11 @@ function selectChoice(item: ChoiceItem) {
 }
 
 onMounted(() => {
-  const saved = localStorage.getItem(STORAGE_KEY)
-  if (saved) {
-    const parsed = JSON.parse(saved)
-    sessionId.value = parsed.sessionId
-    messages.value = parsed.messages
-    currentInput.value = parsed.currentInput
-    isFinished.value = parsed.isFinished
+  const existingId = new URL(window.location.href).searchParams.get(CHAT_QUERY_PARAM)
+  if (existingId) {
+    loadChat(existingId)
   } else {
-    start()
+    createChat()
   }
 })
 </script>
@@ -113,7 +112,7 @@ onMounted(() => {
 <template>
   <main class="chat">
     <h1>POC Typebot</h1>
-    <p class="session">sessionId: {{ sessionId ?? '—' }}</p>
+    <p class="session">chatId: {{ chatId ?? '—' }}</p>
 
     <div class="messages">
       <div v-for="(m, i) in messages" :key="i" :class="['bubble', m.from]">

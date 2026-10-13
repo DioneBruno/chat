@@ -76,3 +76,14 @@ export class TypebotPocClient {
     return body as TypebotTurnResult;
   }
 }
+
+export function extractBotText(message: TypebotMessage): string {
+  const content = message.content as any;
+  if (content?.type === 'markdown') return content.markdown;
+  if (content?.type === 'richText') {
+    return content.richText
+      .map((block: any) => (block.children ?? []).map((c: any) => c.text ?? '').join(''))
+      .join('\n');
+  }
+  return JSON.stringify(content);
+}
