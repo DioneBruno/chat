@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { nextTick, onMounted, ref } from 'vue'
+import { Centrifuge } from 'centrifuge'
+import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 
 /**
  * POC #1 — só renderiza o chat do Typebot via API própria do Nest.
@@ -14,6 +15,7 @@ import { nextTick, onMounted, ref } from 'vue'
  */
 
 const API_URL = 'http://localhost:3001'
+const CENTRIFUGO_WS_URL = 'ws://localhost:8000/connection/websocket'
 const CHAT_QUERY_PARAM = 'chat'
 
 type ChatMessage = { from: 'bot' | 'user'; text: string }
@@ -28,6 +30,7 @@ type ChatStateDto = {
   messages: ChatMessage[]
   input: BotInput | null
   isFinished: boolean
+  pendingOperationId: string | null
 }
 
 const chatId = ref<string | null>(null)
@@ -36,6 +39,8 @@ const currentInput = ref<BotInput | null>(null)
 const textDraft = ref('')
 const isLoading = ref(false)
 const isFinished = ref(false)
+const pendingOperationId = ref<string | null>(null)
+let centrifuge: Centrifuge | null = null
 const messagesEl = ref<HTMLElement | null>(null)
 
 function scrollToBottom() {
@@ -49,7 +54,38 @@ function applyState(state: ChatStateDto) {
   messages.value = state.messages
   currentInput.value = state.input
   isFinished.value = state.isFinished
+  pendingOperationId.value = state.pendingOperationId
   scrollToBottom()
+}
+
+// Eventos do Centrifugo são só sinais: o estado vem sempre da API (fonte da verdade).
+async function refreshState() {
+  if (!chatId.value) return
+  const res = await fetch(`${API_URL}/poc/chats/${chatId.value}`)
+  if (res.ok) applyState((await res.json()) as ChatStateDto)
+}
+
+async function fetchRealtimeTokens(id: string) {
+  const res = await fetch(`${API_URL}/poc/chats/${id}/realtime`)
+  return (await res.json()) as { channel: string; connectionToken: string; subscriptionToken: string }
+}
+
+async function connectRealtime(id: string) {
+  centrifuge?.disconnect()
+  const tokens = await fetchRealtimeTokens(id)
+  centrifuge = new Centrifuge(CENTRIFUGO_WS_URL, {
+    token: tokens.connectionToken,
+    getToken: async () => (await fetchRealtimeTokens(id)).connectionToken,
+  })
+  const sub = centrifuge.newSubscription(tokens.channel, {
+    token: tokens.subscriptionToken,
+    getToken: async () => (await fetchRealtimeTokens(id)).subscriptionToken,
+  })
+  sub.on('publication', () => void refreshState())
+  // ao (re)conectar, recupera operações/mensagens perdidas pela API
+  sub.on('subscribed', () => void refreshState())
+  sub.subscribe()
+  centrifuge.connect()
 }
 
 function setChatIdInUrl(id: string) {
@@ -65,6 +101,7 @@ async function createChat() {
     const state = (await res.json()) as ChatStateDto
     applyState(state)
     setChatIdInUrl(state.chatId)
+    void connectRealtime(state.chatId)
   } finally {
     isLoading.value = false
   }
@@ -80,6 +117,7 @@ async function loadChat(id: string) {
       return
     }
     applyState((await res.json()) as ChatStateDto)
+    void connectRealtime(id)
   } finally {
     isLoading.value = false
   }
@@ -109,6 +147,8 @@ function submitText() {
 function selectChoice(item: ChoiceItem) {
   send(item.content ?? '')
 }
+
+onBeforeUnmount(() => centrifuge?.disconnect())
 
 onMounted(() => {
   const existingId = new URL(window.location.href).searchParams.get(CHAT_QUERY_PARAM)
@@ -142,6 +182,13 @@ onMounted(() => {
             {{ item.content }}
           </button>
         </div>
+      </div>
+
+      <div v-if="pendingOperationId" class="wa-row bot">
+        <div class="wa-bubble wa-typing" title="Consultando suas informações...">
+          <span></span><span></span><span></span>
+        </div>
+        <small>Consultando suas informações...</small>
       </div>
 
       <div v-if="isLoading" class="wa-row bot">

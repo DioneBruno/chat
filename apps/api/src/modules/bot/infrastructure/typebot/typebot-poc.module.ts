@@ -11,5 +11,6 @@ import { TypebotPocStore } from './typebot-poc.store';
 @Module({
   controllers: [TypebotPocController],
   providers: [TypebotPocClient, TypebotPocStore],
+  exports: [TypebotPocClient, TypebotPocStore],
 })
 export class TypebotPocModule {}

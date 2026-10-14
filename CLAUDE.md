@@ -40,6 +40,7 @@ O NestJS é a **autoridade do tenant e responsável atual pela conversa**. Typeb
 5. Ao abrir o chat, NestJS verifica autorização e recupera histórico. Fechar a página **não encerra** o atendimento.
 6. **Todo atendimento inicia no Typebot**. O bot pode resolver, encaminhar ao Chatwoot ou tratar ausência de expediente.
 7. Protocolo encerrado é **somente leitura**. Novo contato exige novo protocolo.
+8. Quando protocolo estiver encerrado, mostrar um botao para abrir um novo protocolo
 
 ### Identificação do consumidor
 

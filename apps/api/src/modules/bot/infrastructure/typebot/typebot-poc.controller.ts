@@ -5,7 +5,8 @@
  * `bot`/`attendances`.
  */
 import { Body, Controller, Get, NotFoundException, Param, Post } from '@nestjs/common';
-import { extractBotText, TypebotPocClient, TypebotTurnResult } from './typebot-poc.client';
+import { TypebotPocClient } from './typebot-poc.client';
+import { randomUUID } from 'crypto';
 import { ChatState, TypebotPocStore } from './typebot-poc.store';
 
 @Controller('poc/chats')
@@ -17,15 +18,16 @@ export class TypebotPocController {
 
   @Post()
   async create() {
-    const result = await this.client.startChat();
-    const chat = this.store.create(result.sessionId!);
-    this.applyTurn(chat, result);
-    return this.toDto(chat);
+    const chatId = randomUUID();
+    const result = await this.client.startChat({ chatId });
+    const chat = this.store.create(result.sessionId!, chatId);
+    this.store.applyTurn(chat, result);
+    return this.store.toDto(chat);
   }
 
   @Get(':id')
   get(@Param('id') id: string) {
-    return this.toDto(this.findOrFail(id));
+    return this.store.toDto(this.findOrFail(id));
   }
 
   @Post(':id/messages')
@@ -33,8 +35,8 @@ export class TypebotPocController {
     const chat = this.findOrFail(id);
     chat.messages.push({ from: 'user', text: body.text });
     const result = await this.client.continueChat(chat.typebotSessionId, body.text);
-    this.applyTurn(chat, result);
-    return this.toDto(chat);
+    this.store.applyTurn(chat, result);
+    return this.store.toDto(chat);
   }
 
   private findOrFail(id: string): ChatState {
@@ -43,22 +45,5 @@ export class TypebotPocController {
       throw new NotFoundException(`chat ${id} não encontrado`);
     }
     return chat;
-  }
-
-  private applyTurn(chat: ChatState, result: TypebotTurnResult) {
-    for (const message of result.messages ?? []) {
-      chat.messages.push({ from: 'bot', text: extractBotText(message) });
-    }
-    chat.input = result.input ?? null;
-    chat.isFinished = !result.input;
-  }
-
-  private toDto(chat: ChatState) {
-    return {
-      chatId: chat.id,
-      messages: chat.messages,
-      input: chat.input,
-      isFinished: chat.isFinished,
-    };
   }
 }
