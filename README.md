@@ -2,7 +2,7 @@
 
 SaaS multitenant de atendimento digital protocolado (Typebot → Chatwoot → Typebot), com NestJS como orquestrador. A especificação completa está no [CLAUDE.md](CLAUDE.md).
 
-> **Estado atual:** POC #2 (consulta assíncrona + Centrifugo, ver [docs/poc-async-notas.md](docs/poc-async-notas.md); validação contra o Typebot real pendente) sobre a POC #1 (validação da API do Typebot self-hosted + chat em Vue 3). A API Nest **ainda não usa banco de dados** (o histórico do chat fica em memória). O único banco existente hoje é o PostgreSQL do próprio Typebot.
+> **Estado atual:** POC #4 (fundação persistente: protocolos, mensagens, acesso por link/OTP no PostgreSQL próprio, ver [docs/poc-fundacao-notas.md](docs/poc-fundacao-notas.md)) ainda **não integrada** às POCs abaixo. POC #2 (consulta assíncrona + Centrifugo, ver [docs/poc-async-notas.md](docs/poc-async-notas.md); validação contra o Typebot real pendente) sobre a POC #1 (validação da API do Typebot self-hosted + chat em Vue 3). O chat das POCs #1–#3 ainda guarda o histórico em memória; os módulos novos (`/public/*`) já persistem no banco `platform`.
 
 ## Estrutura
 
@@ -104,9 +104,20 @@ Sem porta publicada; acesso via container:
 docker compose exec typebot-redis redis-cli
 ```
 
-### Banco da plataforma (NestJS)
+### Banco da plataforma (NestJS) — `platform-db`
 
-Ainda não existe. Na etapa "Fundação persistente" (seção 18 do [CLAUDE.md](CLAUDE.md)) será criado um banco PostgreSQL próprio, separado do Typebot e do Chatwoot. Atualize esta seção quando for adicionado.
+| Item | Valor |
+|---|---|
+| Banco / usuário | `platform` / `platform` |
+| Senha | `platform` (`PLATFORM_DB_PASSWORD`) |
+| Porta no host | `127.0.0.1:5434` |
+| Volume | `platform-db-data` |
+
+Migrations rodam sozinhas na subida da API. Testes de integração: `cd apps/api && npm run test:int`.
+
+```bash
+docker compose exec platform-db psql -U platform -d platform
+```
 
 ## Comandos úteis
 
@@ -115,6 +126,7 @@ Ainda não existe. Na etapa "Fundação persistente" (seção 18 do [CLAUDE.md](
 cd apps/api
 npm run lint
 npm test
+npm run test:int   # integração; exige platform-db no ar
 npm run test:e2e
 npm run build
 

@@ -107,6 +107,27 @@ services:
       <<: *typebot-env
       SSRF_ALLOWED_HOSTS: api
 
+  # --- POC #4: banco da plataforma (NestJS), separado do Typebot e do Chatwoot ---
+  platform-db:
+    image: postgres:16
+    restart: unless-stopped
+    volumes:
+      - platform-db-data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: platform
+      POSTGRES_USER: platform
+      POSTGRES_PASSWORD: ${PLATFORM_DB_PASSWORD:-platform}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U platform -d platform"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    # Publicada só para testes de integração/desenvolvimento local.
+    ports:
+      - "127.0.0.1:5434:5432"
+    networks:
+      - platform-network
+
   # --- POC #3: Chatwoot v4.18.0 (painel do atendente) em http://localhost:3000 ---
   # Banco e Redis próprios: não compartilha dados com Typebot nem com a plataforma.
   chatwoot-db:
@@ -186,12 +207,19 @@ services:
     build: ./apps/api
     restart: unless-stopped
     depends_on:
-      - typebot-viewer
-      - centrifugo
+      platform-db:
+        condition: service_healthy
+      typebot-viewer:
+        condition: service_started
+      centrifugo:
+        condition: service_started
     ports:
       - "3001:3001"
     environment:
       PORT: "3001"
+      DATABASE_URL: postgresql://platform:${PLATFORM_DB_PASSWORD:-platform}@platform-db:5432/platform
+      # Segredo de assinatura das sessões de acesso ao chat (POC; trocar em produção).
+      ACCESS_SESSION_SECRET: ${ACCESS_SESSION_SECRET:-poc-access-session-secret-change-me}
       TYPEBOT_API_URL: http://typebot-viewer:3000/api
       TYPEBOT_ID: ${TYPEBOT_ID:-}
       TYPEBOT_API_TOKEN: ${TYPEBOT_API_TOKEN:-}
@@ -232,3 +260,4 @@ volumes:
   redis-data:
   chatwoot-db-data:
   chatwoot-redis-data:
+  platform-db-data:
