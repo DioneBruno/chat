@@ -38,8 +38,17 @@ Achados que viraram correção:
 
 > **Atenção (descoberto na POC #3):** o bloco HTTP do Typebot só envia o corpo
 > configurado com `options.isCustomBody: true`; sem isso `action` não chega ao
-> Nest. O caminho de falha (`fail()` avançando o fluxo + variável `acao`) está
-> escrito mas **não foi testado**.
+> Nest. O caminho de falha foi **validado** (ver abaixo).
+
+## Caminho de falha (validado)
+
+`POST /poc/chats` aceita `{"action":"customer.requests.fail"}` (vira a variável
+`acao` do fluxo). Resultado medido: 3 tentativas com backoff (~12 s com
+`OP_SIMULATED_MS=2000`), depois `bot.operation.failed` + `message.created`,
+indicador removido e **uma** mensagem de erro no histórico. O Nest avança o fluxo
+parado no input com o texto de falha (`continueChat`), então o fluxo termina em
+vez de ficar preso. Na versão real o fluxo deve ramificar por uma variável de
+status em vez de reaproveitar `resultado`.
 
 ## Fluxo a montar no builder (publicar e usar o public ID em `TYPEBOT_ID`)
 
