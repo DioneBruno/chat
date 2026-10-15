@@ -9,7 +9,7 @@ SaaS multitenant de atendimento digital protocolado (Typebot → Chatwoot → Ty
 ```text
 apps/api        API NestJS (porta 3000 por padrão)
 apps/web-poc    Chat de teste em Vue 3 + Vite (porta 5173)
-infra/typebot-poc  docker-compose do Typebot v3.19.0 + Postgres + Redis + Mailpit
+docker-compose.yml  Infra completa: Typebot v3.19.0 + Postgres + Redis + Mailpit + Centrifugo + API + front
 docs/           Notas das POCs
 ```
 
@@ -21,66 +21,40 @@ docs/           Notas das POCs
 
 ## Como subir
 
-### 1. Infra do Typebot (Docker)
-
 ```bash
-cd infra/typebot-poc
-cp .env.example .env
-# gere o segredo e cole em ENCRYPTION_SECRET no .env
-openssl rand -base64 24 | tr -d '\n'; echo
-docker compose up -d
-docker compose ps        # aguarde db e redis ficarem "healthy"
+docker compose up -d --build
 ```
+
+Um único comando sobe toda a infra (Typebot, Postgres, Redis, Mailpit, Centrifugo, API e front). Não é preciso `.env` para a primeira subida; para sobrescrever defaults copie `.env.example` para `.env`.
 
 | Serviço | URL / porta | Observação |
 |---|---|---|
+| Front (chat Vue 3) | http://localhost:5173 | |
+| API NestJS | http://localhost:3001 | Endpoints `POST /poc/chats`, `GET /poc/chats/:id`, `POST /poc/chats/:id/messages` |
 | Typebot builder (editor) | http://localhost:8080 | Login por magic link |
 | Typebot viewer (API de chat) | http://localhost:8081 | A API é `/api/v1/...` |
+| Centrifugo | http://localhost:8000 | |
 | Mailpit (SMTP descartável) | http://localhost:8025 | Receba aqui o magic link de login |
-| Mailpit SMTP | `localhost:1025` | |
 
-### 2. Configurar o Typebot (primeira vez)
+### Configurar o Typebot (primeira vez)
 
-1. Abra http://localhost:8080, informe `admin@poc.local` (valor de `ADMIN_EMAIL`) e abra o link recebido no Mailpit (http://localhost:8025).
+1. Abra http://localhost:8080, informe `admin@poc.local` (valor de `ADMIN_EMAIL`) e abra o link recebido no Mailpit.
 2. Crie e **publique** um fluxo simples (boas-vindas → input → escolha → mensagem final).
-3. Copie o **public ID** do fluxo publicado (será o `TYPEBOT_ID`).
-4. Em *Configurações da conta → API tokens*, crie um token (será o `TYPEBOT_API_TOKEN`).
+3. Copie o **public ID** do fluxo publicado (`TYPEBOT_ID`).
+4. Em *Configurações da conta → API tokens*, crie um token (`TYPEBOT_API_TOKEN`).
+5. Coloque os dois no `.env` da raiz e recrie a API: `docker compose up -d api`.
 
-### 3. API (NestJS)
-
-Crie `apps/api/.env` (não versionado):
-
-```env
-PORT=3001
-TYPEBOT_API_URL=http://localhost:8081/api
-TYPEBOT_ID=<public-id-do-fluxo>
-TYPEBOT_API_TOKEN=<token-criado-no-builder>
-```
-
-> `PORT=3001` é necessário: o front da POC aponta para `http://localhost:3001` (hardcoded em [App.vue](apps/web-poc/src/App.vue)). Sem `PORT`, a API sobe na 3000.
+### Desenvolvimento local (sem containers para API/front)
 
 ```bash
-cd apps/api
-npm install
-npm run start:dev
+docker compose up -d typebot-builder typebot-viewer centrifugo mailpit
+cd apps/api && npm install && npm run start:dev    # precisa de apps/api/.env com PORT=3001, TYPEBOT_*
+cd apps/web-poc && npm install && npm run dev      # http://localhost:5173
 ```
-
-Endpoints da POC: `POST /poc/chats`, `GET /poc/chats/:id`, `POST /poc/chats/:id/messages`.
-
-### 4. Frontend (Vue 3)
-
-```bash
-cd apps/web-poc
-npm install
-npm run dev
-```
-
-Acesse http://localhost:5173. O chat guarda o `chatId` na URL (`?chat=<uuid>`), então recarregar a página mantém o histórico (enquanto a API não for reiniciada, pois o store é em memória).
 
 ### Parar / limpar
 
 ```bash
-cd infra/typebot-poc
 docker compose down        # mantém os dados (volumes)
 docker compose down -v     # apaga banco e Redis do Typebot
 ```
@@ -89,7 +63,7 @@ docker compose down -v     # apaga banco e Redis do Typebot
 
 ### PostgreSQL do Typebot (`typebot-db`)
 
-Credenciais definidas no [docker-compose.yml](infra/typebot-poc/docker-compose.yml):
+Credenciais definidas no [docker-compose.yml](docker-compose.yml):
 
 | Item | Valor |
 |---|---|
@@ -103,7 +77,6 @@ Credenciais definidas no [docker-compose.yml](infra/typebot-poc/docker-compose.y
 Acesso via `psql` dentro do container:
 
 ```bash
-cd infra/typebot-poc
 docker compose exec typebot-db psql -U postgres -d typebot
 ```
 
@@ -153,7 +126,7 @@ npm run build
 ## Problemas comuns
 
 - **Login por e-mail do Typebot não funciona:** `SMTP_AUTH_DISABLED` deve ser `false` (com `true` o login por magic link é desativado por completo).
-- **API retorna erro ao iniciar chat:** confira `TYPEBOT_ID` (fluxo precisa estar publicado) e `TYPEBOT_API_TOKEN` no `apps/api/.env`.
+- **API retorna erro ao iniciar chat:** confira `TYPEBOT_ID` (fluxo precisa estar publicado) e `TYPEBOT_API_TOKEN` no `.env` da raiz (ou `apps/api/.env` no modo local).
 - **CORS / front não conecta:** verifique se a API está na porta 3001.
 
 Notas detalhadas da POC: [docs/poc-typebot-notas.md](docs/poc-typebot-notas.md).

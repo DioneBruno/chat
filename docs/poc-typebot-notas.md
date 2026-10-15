@@ -59,8 +59,8 @@
 
 ## Infra usada (descartável, não é a infra de produto)
 
-- `infra/typebot-poc/docker-compose.yml` — isolado, não entra no compose da
-  seção 16 do CLAUDE.md.
+- `docker-compose.yml` (raiz) — sobe toda a infra da POC com `docker compose up`;
+  ainda não é o compose "de produto" da seção 16 do CLAUDE.md.
 - Endpoints temporários em
   `apps/api/src/modules/bot/infrastructure/typebot/typebot-poc.*`
   — sem tenant/protocolo, store em memória (não Postgres). Substituir pelos

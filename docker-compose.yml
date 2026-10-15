@@ -1,0 +1,147 @@
+# Infra completa da POC: `docker compose up` sobe tudo.
+#
+# Typebot v3.19.0 (release oficial de 2026-09-14, imagens baptistearno/typebot-*),
+# Postgres, Redis, Mailpit, Centrifugo, API NestJS e front Vue 3.
+# Variáveis opcionais em ./.env (ver .env.example); sem ele valem os defaults abaixo.
+
+x-typebot-common: &typebot-common
+  restart: unless-stopped
+  depends_on:
+    typebot-redis:
+      condition: service_healthy
+    typebot-db:
+      condition: service_healthy
+  networks:
+    - platform-network
+  environment: &typebot-env
+    ENCRYPTION_SECRET: ${ENCRYPTION_SECRET:-poc-encryption-secret-0123456789ab}
+    DATABASE_URL: postgresql://postgres:typebot@typebot-db:5432/typebot
+    REDIS_URL: redis://typebot-redis:6379
+    NODE_OPTIONS: --no-node-snapshot
+    NEXTAUTH_URL: http://localhost:8080
+    NEXT_PUBLIC_VIEWER_URL: http://localhost:8081
+    ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@poc.local}
+    # Login por magic link via Mailpit. Com SMTP_AUTH_DISABLED=true o login por e-mail é desativado.
+    SMTP_HOST: mailpit
+    SMTP_PORT: "1025"
+    SMTP_SECURE: "false"
+    SMTP_AUTH_DISABLED: "false"
+    NEXT_PUBLIC_SMTP_FROM: "Typebot POC <notifications@poc.local>"
+
+services:
+  typebot-db:
+    image: postgres:16
+    restart: unless-stopped
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: typebot
+      POSTGRES_PASSWORD: typebot
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - platform-network
+
+  typebot-redis:
+    image: redis:alpine
+    restart: unless-stopped
+    command: --save 60 1 --loglevel warning
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
+      start_period: 20s
+      interval: 30s
+      retries: 5
+      timeout: 3s
+    volumes:
+      - redis-data:/data
+    networks:
+      - platform-network
+
+  typebot-builder:
+    <<: *typebot-common
+    image: baptistearno/typebot-builder:3.19.0
+    ports:
+      - "8080:3000"
+
+  typebot-viewer:
+    <<: *typebot-common
+    image: baptistearno/typebot-viewer:3.19.0
+    ports:
+      - "8081:3000"
+    # POC #2: o bloco HTTP do fluxo chama http://host.docker.internal:3001 (a API publicada no host).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # SMTP descartável só para capturar o magic link de login do builder.
+  # UI web em http://localhost:8025
+  mailpit:
+    image: axllent/mailpit:latest
+    restart: unless-stopped
+    ports:
+      - "8025:8025"
+      - "1025:1025"
+    networks:
+      - platform-network
+
+  # Realtime. API HTTP e WebSocket em http://localhost:8000
+  # (segredos só da POC; a API usa os mesmos valores por padrão).
+  centrifugo:
+    image: centrifugo/centrifugo:v6
+    restart: unless-stopped
+    command: centrifugo
+    ports:
+      - "8000:8000"
+    environment:
+      CENTRIFUGO_CLIENT_TOKEN_HMAC_SECRET_KEY: poc-hmac-secret
+      CENTRIFUGO_HTTP_API_KEY: poc-api-key
+      CENTRIFUGO_CLIENT_ALLOWED_ORIGINS: "http://localhost:5173"
+      CENTRIFUGO_HTTP_API_INSECURE: "false"
+    networks:
+      - platform-network
+
+  # API NestJS em http://localhost:3001 (o front aponta para essa porta).
+  # TYPEBOT_ID e TYPEBOT_API_TOKEN só existem depois de configurar o builder:
+  # preencha no .env e rode `docker compose up -d api`.
+  api:
+    build: ./apps/api
+    restart: unless-stopped
+    depends_on:
+      - typebot-viewer
+      - centrifugo
+    ports:
+      - "3001:3001"
+    environment:
+      PORT: "3001"
+      TYPEBOT_API_URL: http://typebot-viewer:3000/api
+      TYPEBOT_ID: ${TYPEBOT_ID:-}
+      TYPEBOT_API_TOKEN: ${TYPEBOT_API_TOKEN:-}
+      CENTRIFUGO_API_URL: http://centrifugo:8000/api
+      CENTRIFUGO_API_KEY: poc-api-key
+      CENTRIFUGO_HMAC_SECRET: poc-hmac-secret
+      BOT_INTERNAL_SECRET: ${BOT_INTERNAL_SECRET:-}
+      OP_SIMULATED_MS: ${OP_SIMULATED_MS:-5000}
+      ASYNC_RESUME_MODE: ${ASYNC_RESUME_MODE:-continue}
+    networks:
+      - platform-network
+
+  # Chat Vue 3 em http://localhost:5173
+  web:
+    build: ./apps/web-poc
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "5173:80"
+    networks:
+      - platform-network
+
+networks:
+  platform-network:
+    driver: bridge
+
+volumes:
+  db-data:
+  redis-data:

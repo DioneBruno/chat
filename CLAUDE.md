@@ -1,6 +1,6 @@
 # CLAUDE.md — Plataforma SaaS de Atendimento Digital Protocolado
 
-> Documento de contexto e especificação para Claude Code ou qualquer outra IA que implemente o projeto. Atualizado em 13/10/2026. **Distinguir decisões fechadas, recomendações e pontos pendentes.** Não presumir que provas de conceito ou integrações já foram validadas.
+> Documento de contexto e especificação para Claude Code ou qualquer outra IA que implemente o projeto.
 
 ## 1. Objetivo do produto
 
@@ -11,7 +11,7 @@ Construir uma plataforma SaaS multitenant de atendimento digital protocolado par
 - **NestJS/TypeScript**: núcleo e autoridade de negócio, implementado como monólito modular. Preferir `import` no TypeScript.
 - **PostgreSQL**: fonte da verdade para tenants, protocolos, conversas, mensagens, estados, sessões, eventos e notificações.
 - **Centrifugo**: WebSocket/pub-sub de entrega em tempo real, sem substituir persistência e sem autorizar diretamente consumidores sem validação do NestJS.
-- **Typebot self-hosted, instância única compartilhada**: editor visual e runtime dos bots. **Um workspace e fluxos separados por empresa**, acessíveis somente à equipe interna do SaaS. Consumidor nunca acessa o editor.
+- **Typebot self-hosted, instância única compartilhada**: editor visual e runtime dos bots. **Um workspace e fluxos separados por empresa**, acessíveis somente à equipe interna do SaaS nesse primeiro momento.
 - **Chatwoot**: somente interface do atendimento humano; usar integração de inbox/API e webhooks, sem usar Chatwoot como base canônica do histórico.
 - **Chat web próprio**: SDK JavaScript e frontend Vue 3; mesma interface para mensagens do bot e do humano. Não incorporar obrigatoriamente widgets nativos do Typebot/Chatwoot.
 - **WhatsApp gateway intercambiável**: abstração `WhatsAppGateway`, possivelmente Evolution API ou provedor oficial. WhatsApp serve como **porta de entrada e canal de avisos**, não como interface principal de conversa. Avaliar conformidade e riscos de provedores não oficiais.
@@ -97,7 +97,7 @@ WhatsApp ou link público
 ## 8. Multitenancy do Typebot (DECISÃO FECHADA)
 
 - **Uma única instalação self-hosted Typebot** para todos os tenants; **workspace separado por empresa**.
-- Somente a equipe interna do SaaS configura/publica fluxos no editor Typebot; clientes não têm acesso ao editor no MVP.
+- Somente a equipe interna do SaaS configura/publica fluxos no editor Typebot nesse primeiro momento; clientes não têm acesso ao editor no MVP.
 - NestJS mantém vínculo `tenant -> workspace -> fluxos publicados -> sessões`; seleciona fluxo por tenant, aplicação e tipo, com fallback para fluxo padrão da empresa.
 - Browser nunca escolhe `external_typebot_id`, `flowId` externo, workspace ou `sessionId`; NestJS resolve e valida.
 - Integrações com APIs das empresas devem passar **preferencialmente pelo NestJS** usando ações explicitamente permitidas, credenciais segregadas, autorização por consumidor/tenant, filtragem de respostas, timeouts, rate limits, proteção SSRF e auditoria sanitizada.

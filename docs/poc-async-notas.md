@@ -33,7 +33,7 @@
 ## Subir
 
 ```bash
-cd infra/typebot-poc && docker compose up -d   # inclui centrifugo (8000)
+docker compose up -d   # inclui centrifugo (8000)
 # apps/api/.env: PORT=3001 + TYPEBOT_* (ver README)
 cd apps/api && npm run start:dev
 cd apps/web-poc && npm run dev
