@@ -71,9 +71,11 @@ services:
     image: baptistearno/typebot-viewer:3.19.0
     ports:
       - "8081:3000"
-    # POC #2: o bloco HTTP do fluxo chama http://host.docker.internal:3001 (a API publicada no host).
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    # POC #2: o bloco HTTP do fluxo chama http://api:3001. O Typebot bloqueia redes privadas
+    # (SSRF); SSRF_ALLOWED_HOSTS libera só o hostname da nossa API.
+    environment:
+      <<: *typebot-env
+      SSRF_ALLOWED_HOSTS: api
 
   # SMTP descartável só para capturar o magic link de login do builder.
   # UI web em http://localhost:8025
@@ -99,6 +101,8 @@ services:
       CENTRIFUGO_HTTP_API_KEY: poc-api-key
       CENTRIFUGO_CLIENT_ALLOWED_ORIGINS: "http://localhost:5173"
       CENTRIFUGO_HTTP_API_INSECURE: "false"
+      # Canais "attendance:<id>" exigem o namespace declarado (senão: unknown channel).
+      CENTRIFUGO_CHANNEL_NAMESPACES: '[{"name":"attendance"}]'
     networks:
       - platform-network
 

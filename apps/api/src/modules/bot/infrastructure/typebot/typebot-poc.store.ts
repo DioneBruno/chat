@@ -41,6 +41,10 @@ export class TypebotPocStore {
     return chat;
   }
 
+  remove(id: string) {
+    this.chats.delete(id);
+  }
+
   get(id: string): ChatState | undefined {
     return this.chats.get(id);
   }

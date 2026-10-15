@@ -10,7 +10,7 @@
  *  - `direct`: o Nest só publica o resultado como mensagem do bot
  *    (fallback caso o Typebot não aceite a retomada).
  */
-import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { ConflictException, Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { TypebotPocClient } from '../bot/infrastructure/typebot/typebot-poc.client';
 import { TypebotPocStore } from '../bot/infrastructure/typebot/typebot-poc.store';
@@ -57,7 +57,7 @@ export class BotOperationsPocService implements OnModuleInit, OnModuleDestroy {
   /** Chamado pelo bloco HTTP do Typebot: registra e retorna na hora. */
   async enqueue(chatId: string, action: string, idempotencyKey?: string): Promise<BotOperation> {
     const chat = this.store.get(chatId);
-    if (!chat || chat.isFinished) throw new Error('atendimento inexistente ou encerrado');
+    if (!chat || chat.isFinished) throw new ConflictException('atendimento inexistente ou encerrado');
 
     const key = idempotencyKey ?? `${chatId}:${action}:${chat.messages.length}`;
     const existing = [...this.operations.values()].find(

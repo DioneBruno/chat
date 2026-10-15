@@ -19,9 +19,17 @@ export class TypebotPocController {
   @Post()
   async create() {
     const chatId = randomUUID();
-    const result = await this.client.startChat({ chatId });
-    const chat = this.store.create(result.sessionId!, chatId);
-    this.store.applyTurn(chat, result);
+    // O bloco HTTP do fluxo chama /internal/bot/operations ainda dentro do startChat:
+    // o chat precisa existir antes, e o sessionId só é conhecido depois.
+    const chat = this.store.create('', chatId);
+    try {
+      const result = await this.client.startChat({ chatId });
+      chat.typebotSessionId = result.sessionId!;
+      this.store.applyTurn(chat, result);
+    } catch (error) {
+      this.store.remove(chatId);
+      throw error;
+    }
     return this.store.toDto(chat);
   }
 
