@@ -1,5 +1,7 @@
 # POC #2 — Consulta assíncrona (Typebot → Nest → Centrifugo)
 
+> **Histórico:** a fila em memória e `/internal/bot/operations` com segredo estático foram substituídos na etapa 5 ([etapa5-confiabilidade-notas.md](etapa5-confiabilidade-notas.md)): operações em `bot_operations`, credencial de execução por sessão, retomada com `resume_status`.
+
 > **Estado: caminho feliz VALIDADO contra Typebot 3.19.0 + Centrifugo 6.9.7 reais
 > (modo `continue`).** Pendentes: falha da operação, reload no meio da espera e
 > modo `direct` (ver checklist).

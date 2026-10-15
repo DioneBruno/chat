@@ -4,8 +4,18 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { DatabaseService, isPgError } from '../../database/database.service';
-import { Actor } from '../attendances/attendances.service';
+import { DatabaseService, Queryable } from '../../database/database.service';
+import type { Actor } from '../attendances/attendances.service';
+import { OutboxService } from '../outbox/outbox.service';
+
+export interface AppendInput {
+  tenantId: string;
+  attendanceId: string;
+  sender: Actor;
+  content: unknown;
+  idempotencyKey?: string;
+  externalIds?: Record<string, unknown>;
+}
 
 export type MessageContent =
   | { type: 'text'; text: string }
@@ -63,86 +73,92 @@ export function validateContent(content: unknown): MessageContent {
 
 @Injectable()
 export class MessagesService {
-  constructor(private readonly db: DatabaseService) {}
+  constructor(
+    private readonly db: DatabaseService,
+    private readonly outbox: OutboxService,
+  ) {}
 
   /**
    * Persiste uma mensagem. Idempotente por `idempotencyKey` (reenvio devolve a
    * existente, mesmo após o encerramento). Protocolo encerrado rejeita (409).
    * Mensagem do consumidor renova/zera o prazo de inatividade na mesma transação.
-   * A publicação realtime acontece DEPOIS, por quem chamou (seção 5).
+   * O sinal realtime e o roteamento (`message.received`) saem pelo outbox, gravados
+   * junto da mensagem: publicação só depois da persistência (seção 5).
    */
-  async append(input: {
-    tenantId: string;
-    attendanceId: string;
-    sender: Actor;
-    content: unknown;
-    idempotencyKey?: string;
-    externalIds?: Record<string, unknown>;
-  }): Promise<{ message: Message; duplicate: boolean }> {
+  async append(
+    input: AppendInput,
+  ): Promise<{ message: Message; duplicate: boolean }> {
+    return this.db.tx((client) => this.appendIn(client, input));
+  }
+
+  /** Versão para compor com outras escritas na transação do chamador. */
+  async appendIn(
+    q: Queryable,
+    input: AppendInput,
+  ): Promise<{ message: Message; duplicate: boolean }> {
     const content = validateContent(input.content);
+    // Trava a linha do atendimento (serializa com close/expireDue) e confere o status.
+    const lock = await q.query<{ status: string; conversation_id: string }>(
+      `SELECT a.status, c.id AS conversation_id
+         FROM attendances a JOIN conversations c ON c.tenant_id = a.tenant_id AND c.attendance_id = a.id
+        WHERE a.tenant_id = $1 AND a.id = $2 FOR UPDATE OF a`,
+      [input.tenantId, input.attendanceId],
+    );
+    if (!lock.rows[0])
+      throw new NotFoundException('atendimento não encontrado');
     if (input.idempotencyKey) {
       const existing = await this.findByKey(
+        q,
         input.tenantId,
         input.attendanceId,
         input.idempotencyKey,
       );
       if (existing) return { message: existing, duplicate: true };
     }
-    try {
-      return await this.db.tx(async (client) => {
-        // Trava a linha do atendimento (serializa com close/expireDue) e confere o status.
-        const lock = await client.query<{
-          status: string;
-          conversation_id: string;
-        }>(
-          `SELECT a.status, c.id AS conversation_id
-             FROM attendances a JOIN conversations c ON c.tenant_id = a.tenant_id AND c.attendance_id = a.id
-            WHERE a.tenant_id = $1 AND a.id = $2 FOR UPDATE OF a`,
-          [input.tenantId, input.attendanceId],
-        );
-        if (!lock.rows[0])
-          throw new NotFoundException('atendimento não encontrado');
-        if (lock.rows[0].status !== 'open')
-          throw new ConflictException('protocolo encerrado: somente leitura');
+    if (lock.rows[0].status !== 'open')
+      throw new ConflictException('protocolo encerrado: somente leitura');
 
-        if (input.sender === 'consumer') {
-          // Resposta cancela o prazo de pós-atendimento; nas demais fases renova o prazo geral.
-          await client.query(
-            `UPDATE attendances a SET inactivity_deadline_at = CASE
-                 WHEN a.phase IN ('post_service', 'awaiting_business_hours') THEN NULL
-                 ELSE now() + make_interval(mins => (SELECT general_inactivity_minutes FROM tenant_settings WHERE tenant_id = a.tenant_id))
-               END
-              WHERE a.tenant_id = $1 AND a.id = $2`,
-            [input.tenantId, input.attendanceId],
-          );
-        }
-        const { rows } = await client.query<Message>(
-          `INSERT INTO messages (tenant_id, attendance_id, conversation_id, sender_type, content, external_ids, idempotency_key)
-           VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING ${COLUMNS}`,
-          [
-            input.tenantId,
-            input.attendanceId,
-            lock.rows[0].conversation_id,
-            input.sender,
-            JSON.stringify(content),
-            JSON.stringify(input.externalIds ?? {}),
-            input.idempotencyKey ?? null,
-          ],
-        );
-        return { message: rows[0], duplicate: false };
+    const { rows } = await q.query<Message>(
+      `INSERT INTO messages (tenant_id, attendance_id, conversation_id, sender_type, content, external_ids, idempotency_key)
+       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING ${COLUMNS}`,
+      [
+        input.tenantId,
+        input.attendanceId,
+        lock.rows[0].conversation_id,
+        input.sender,
+        JSON.stringify(content),
+        JSON.stringify(input.externalIds ?? {}),
+        input.idempotencyKey ?? null,
+      ],
+    );
+    const message = rows[0];
+
+    if (input.sender === 'consumer') {
+      // Resposta cancela o prazo de pós-atendimento; nas demais fases renova o prazo geral.
+      await q.query(
+        `UPDATE attendances a SET inactivity_deadline_at = CASE
+             WHEN a.phase IN ('post_service', 'awaiting_business_hours') THEN NULL
+             ELSE now() + make_interval(mins => (SELECT general_inactivity_minutes FROM tenant_settings WHERE tenant_id = a.tenant_id))
+           END
+          WHERE a.tenant_id = $1 AND a.id = $2`,
+        [input.tenantId, input.attendanceId],
+      );
+      await this.outbox.enqueue(q, {
+        tenantId: input.tenantId,
+        attendanceId: input.attendanceId,
+        type: 'message.received',
+        payload: { messageId: message.id, seq: message.seq },
+        dedupeKey: `message.received:${message.id}`,
       });
-    } catch (error) {
-      // Corrida entre dois reenvios com a mesma chave: o perdedor devolve o vencedor.
-      if (input.idempotencyKey && isPgError(error, '23505')) {
-        const existing = await this.findByKey(
-          input.tenantId,
-          input.attendanceId,
-          input.idempotencyKey,
-        );
-        if (existing) return { message: existing, duplicate: true };
-      }
-      throw error;
     }
+    await this.outbox.enqueue(q, {
+      tenantId: input.tenantId,
+      attendanceId: input.attendanceId,
+      type: 'realtime.publish',
+      payload: { event: 'message.created', seq: message.seq },
+      dedupeKey: `message.created:${message.id}`,
+    });
+    return { message, duplicate: false };
   }
 
   /** Histórico em ordem; `afterSeq` permite sincronizar só o que falta após reconexão. */
@@ -167,11 +183,12 @@ export class MessagesService {
   }
 
   private async findByKey(
+    q: Queryable,
     tenantId: string,
     attendanceId: string,
     key: string,
   ): Promise<Message | null> {
-    const { rows } = await this.db.query<Message>(
+    const { rows } = await q.query<Message>(
       `SELECT ${COLUMNS} FROM messages WHERE tenant_id = $1 AND attendance_id = $2 AND idempotency_key = $3`,
       [tenantId, attendanceId, key],
     );

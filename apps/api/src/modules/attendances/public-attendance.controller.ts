@@ -1,8 +1,8 @@
 /**
  * API pública do chat (consumidor). O browser só envia texto e o token de
  * acesso: tenant, aplicação, consumidor e atendimento vêm sempre da sessão
- * validada pelo NestJS (seção 8). Roteamento ao Typebot/Chatwoot entra na
- * etapa 5 (bot_sessions/orquestrador); aqui as mensagens só são persistidas.
+ * validada pelo NestJS (seção 8). Aqui a mensagem só é persistida; o roteamento ao
+ * Typebot/Chatwoot acontece depois, no worker (evento `message.received` do outbox).
  */
 import {
   BadRequestException,
@@ -22,6 +22,7 @@ import { SessionGuard } from '../identity-access/session.guard';
 import type { AuthedRequest } from '../identity-access/session.guard';
 import { IdentityAccessService } from '../identity-access/identity-access.service';
 import { MessagesService } from '../messages/messages.service';
+import { CentrifugoService } from '../realtime/centrifugo.service';
 import { TenantsService } from '../tenants/tenants.service';
 import { AttendancesService } from './attendances.service';
 import type { Attendance } from './attendances.service';
@@ -40,6 +41,7 @@ export class PublicAttendanceController {
     private readonly attendances: AttendancesService,
     private readonly identity: IdentityAccessService,
     private readonly messages: MessagesService,
+    private readonly realtime: CentrifugoService,
   ) {}
 
   /** Entrada pelo link público genérico: visitante anônimo recebe protocolo e sessão. */
@@ -94,21 +96,39 @@ export class PublicAttendanceController {
       attendanceId,
       afterSeq: Number(after) || 0,
     });
-    return { attendance: this.toDto(attendance), messages };
+    // Reconexão: o banco é a verdade (mensagens, operação pendente, etapa esperada).
+    const chat = await this.attendances.chatState(tenantId, attendanceId);
+    return { attendance: this.toDto(attendance), messages, chat };
+  }
+
+  /** Tokens do canal privado do atendimento; só a sessão validada recebe. */
+  @Get('attendance/realtime')
+  @UseGuards(SessionGuard)
+  realtimeTokens(@Req() req: AuthedRequest) {
+    return this.realtime.tokensFor(req.access.attendanceId);
   }
 
   @Post('attendance/messages')
   @UseGuards(SessionGuard)
   async send(
     @Req() req: AuthedRequest,
-    @Body() body: { text?: string; idempotencyKey?: string },
+    @Body() body: { text?: string; optionId?: string; idempotencyKey?: string },
   ) {
     const { tenantId, attendanceId } = req.access;
+    // `optionId` marca a escolha de uma opção; o servidor valida contra a etapa ativa do bot.
+    const optionId =
+      typeof body?.optionId === 'string'
+        ? body.optionId.slice(0, 200)
+        : undefined;
     const { message, duplicate } = await this.messages.append({
       tenantId,
       attendanceId,
       sender: 'consumer',
-      content: { type: 'text', text: str(body?.text, 'text') },
+      content: {
+        type: 'text',
+        text: str(body?.text, 'text'),
+        ...(optionId ? { optionId } : {}),
+      },
       idempotencyKey:
         typeof body?.idempotencyKey === 'string'
           ? body.idempotencyKey.slice(0, 200)

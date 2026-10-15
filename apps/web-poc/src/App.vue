@@ -1,47 +1,65 @@
 <script setup lang="ts">
 import { Centrifuge } from 'centrifuge'
-import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 
 /**
- * POC #1 — só renderiza o chat do Typebot via API própria do Nest.
- * Sem SDK definitivo, sem tenant/protocolo. Ver plano da POC.
+ * Chat do consumidor sobre a API pública persistente (`/public/*`).
  *
- * O Nest é a fonte da verdade do estado do chat, endereçado por um UUID
- * (`chatId`) que fica na URL (?chat=<uuid>) — não usamos localStorage.
- * Recarregar a página com a mesma URL busca o estado de novo no servidor.
+ * O NestJS é a fonte da verdade: tenant, aplicação e atendimento vêm sempre da sessão
+ * (nunca do navegador). O link individual (`?t=<token>`) fica na URL; recarregar a página
+ * troca o token por uma sessão e recupera o histórico completo do banco. Eventos do
+ * Centrifugo são só sinais: ao recebê-los (ou ao reconectar) a página relê a API.
  *
- * Layout inspirado no WhatsApp só pra ambientar o teste da POC — não é o
- * visual final do produto (isso vem com o SDK/design system reais).
+ * Layout inspirado no WhatsApp só pra ambientar o teste — não é o visual final.
  */
 
 const API_URL = 'http://localhost:3001'
 const CENTRIFUGO_WS_URL = 'ws://localhost:8000/connection/websocket'
-const CHAT_QUERY_PARAM = 'chat'
+const LINK_PARAM = 't'
+const TENANT = 'poc'
+const APPLICATION = 'chat'
 
-type ChatMessage = { from: 'bot' | 'user' | 'agent' | 'system'; text: string }
-type ChoiceItem = { id: string; content?: string }
-type BotInput = {
-  type: string
-  items?: ChoiceItem[]
-  options?: { labels?: { placeholder?: string } }
+type Sender = 'consumer' | 'bot' | 'agent' | 'system'
+type MessageContent =
+  | { type: 'text'; text: string; optionId?: string }
+  | { type: 'options'; text?: string; options: { id: string; label: string }[] }
+  | { type: 'input'; inputType: string; text?: string }
+type ChatMessage = { id: string; seq: number; sender: Sender; content: MessageContent }
+type AttendanceDto = {
+  id: string
+  protocolNumber: string
+  status: 'open' | 'closed' | 'expired'
+  phase: string
+  closedReason: string | null
 }
 type ChatStateDto = {
-  chatId: string
+  attendance: AttendanceDto
   messages: ChatMessage[]
-  input: BotInput | null
-  isFinished: boolean
-  pendingOperationId: string | null
+  chat: { pendingOperation: { id: string; status: string } | null; expecting: 'options' | 'input' | null }
 }
 
-const chatId = ref<string | null>(null)
+const session = ref<string | null>(null)
+const attendance = ref<AttendanceDto | null>(null)
 const messages = ref<ChatMessage[]>([])
-const currentInput = ref<BotInput | null>(null)
+const chat = ref<ChatStateDto['chat']>({ pendingOperation: null, expecting: null })
 const textDraft = ref('')
 const isLoading = ref(false)
-const isFinished = ref(false)
-const pendingOperationId = ref<string | null>(null)
+const errorText = ref('')
 let centrifuge: Centrifuge | null = null
 const messagesEl = ref<HTMLElement | null>(null)
+
+const isFinished = computed(() => !!attendance.value && attendance.value.status !== 'open')
+const pendingOperationId = computed(() => chat.value.pendingOperation?.id ?? null)
+/** Só a última mensagem de opções é a etapa ativa; as anteriores ficam desabilitadas. */
+const activeOptionsId = computed(() => {
+  if (chat.value.expecting !== 'options') return null
+  return [...messages.value].reverse().find((m) => m.content.type === 'options')?.id ?? null
+})
+const canType = computed(() => {
+  if (!attendance.value || isFinished.value || pendingOperationId.value) return false
+  if (['human', 'handoff_pending'].includes(attendance.value.phase)) return true
+  return chat.value.expecting === 'input'
+})
 
 function scrollToBottom() {
   nextTick(() => {
@@ -49,90 +67,114 @@ function scrollToBottom() {
   })
 }
 
-function applyState(state: ChatStateDto) {
-  chatId.value = state.chatId
-  messages.value = state.messages
-  currentInput.value = state.input
-  isFinished.value = state.isFinished
-  pendingOperationId.value = state.pendingOperationId
-  scrollToBottom()
+async function api(path: string, init: RequestInit = {}) {
+  const res = await fetch(`${API_URL}${path}`, {
+    ...init,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(session.value ? { Authorization: `Bearer ${session.value}` } : {}),
+    },
+  })
+  return res
 }
 
 // Eventos do Centrifugo são só sinais: o estado vem sempre da API (fonte da verdade).
 async function refreshState() {
-  if (!chatId.value) return
-  const res = await fetch(`${API_URL}/poc/chats/${chatId.value}`)
-  if (res.ok) applyState((await res.json()) as ChatStateDto)
+  if (!session.value) return
+  const after = messages.value.at(-1)?.seq ?? 0
+  const res = await api(`/public/attendance?after=${after}`)
+  if (!res.ok) return
+  const state = (await res.json()) as ChatStateDto
+  attendance.value = state.attendance
+  chat.value = state.chat
+  const known = new Set(messages.value.map((m) => m.id))
+  const fresh = state.messages.filter((m) => !known.has(m.id))
+  if (fresh.length) messages.value = [...messages.value, ...fresh]
+  scrollToBottom()
 }
 
-async function fetchRealtimeTokens(id: string) {
-  const res = await fetch(`${API_URL}/poc/chats/${id}/realtime`)
+async function fetchRealtimeTokens() {
+  const res = await api('/public/attendance/realtime')
   return (await res.json()) as { channel: string; connectionToken: string; subscriptionToken: string }
 }
 
-async function connectRealtime(id: string) {
+async function connectRealtime() {
   centrifuge?.disconnect()
-  const tokens = await fetchRealtimeTokens(id)
+  const tokens = await fetchRealtimeTokens()
   centrifuge = new Centrifuge(CENTRIFUGO_WS_URL, {
     token: tokens.connectionToken,
-    getToken: async () => (await fetchRealtimeTokens(id)).connectionToken,
+    getToken: async () => (await fetchRealtimeTokens()).connectionToken,
   })
   const sub = centrifuge.newSubscription(tokens.channel, {
     token: tokens.subscriptionToken,
-    getToken: async () => (await fetchRealtimeTokens(id)).subscriptionToken,
+    getToken: async () => (await fetchRealtimeTokens()).subscriptionToken,
   })
   sub.on('publication', () => void refreshState())
-  // ao (re)conectar, recupera operações/mensagens perdidas pela API
+  // ao (re)conectar, recupera mensagens e operações perdidas pela API
   sub.on('subscribed', () => void refreshState())
   sub.subscribe()
   centrifuge.connect()
 }
 
-function setChatIdInUrl(id: string) {
+function setLinkInUrl(token: string) {
   const url = new URL(window.location.href)
-  url.searchParams.set(CHAT_QUERY_PARAM, id)
+  url.searchParams.set(LINK_PARAM, token)
   window.history.replaceState({}, '', url)
 }
 
-async function createChat() {
+/** Entra num atendimento novo (visitante anônimo) ou abre outro protocolo após o encerramento. */
+async function enter(path: string, init: RequestInit) {
+  const res = await api(path, init)
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  const body = (await res.json()) as { session: string; linkToken: string }
+  session.value = body.session
+  setLinkInUrl(body.linkToken)
+  messages.value = []
+  await refreshState()
+  void connectRealtime()
+}
+
+async function startNew() {
+  await enter('/public/attendances', {
+    method: 'POST',
+    body: JSON.stringify({ tenant: TENANT, application: APPLICATION }),
+  })
+}
+
+async function restart() {
   isLoading.value = true
   try {
-    const res = await fetch(`${API_URL}/poc/chats`, { method: 'POST' })
-    const state = (await res.json()) as ChatStateDto
-    applyState(state)
-    setChatIdInUrl(state.chatId)
-    void connectRealtime(state.chatId)
+    await enter('/public/attendance/restart', { method: 'POST' })
   } finally {
     isLoading.value = false
   }
 }
 
-async function loadChat(id: string) {
-  isLoading.value = true
-  try {
-    const res = await fetch(`${API_URL}/poc/chats/${id}`)
-    if (!res.ok) {
-      // uuid na URL não existe no servidor (ex.: processo do Nest reiniciou) — começa um novo chat
-      await createChat()
-      return
-    }
-    applyState((await res.json()) as ChatStateDto)
-    void connectRealtime(id)
-  } finally {
-    isLoading.value = false
+async function loadFromLink(token: string) {
+  const res = await api('/public/access/exchange', { method: 'POST', body: JSON.stringify({ token }) })
+  const body = res.ok ? ((await res.json()) as { session?: string; otpRequired?: boolean }) : null
+  if (!body?.session) {
+    // link inválido/expirado/revogado, ou exige OTP (canal de envio ainda pendente): recomeça
+    errorText.value = body?.otpRequired ? 'Este atendimento exige código de acesso.' : ''
+    if (!body?.otpRequired) await startNew()
+    return
   }
+  session.value = body.session
+  await refreshState()
+  void connectRealtime()
 }
 
-async function send(text: string) {
-  if (!chatId.value || !text.trim()) return
+async function send(text: string, optionId?: string) {
+  if (!session.value || !text.trim()) return
   isLoading.value = true
+  errorText.value = ''
   try {
-    const res = await fetch(`${API_URL}/poc/chats/${chatId.value}/messages`, {
+    const res = await api('/public/attendance/messages', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({ text, optionId, idempotencyKey: crypto.randomUUID() }),
     })
-    applyState((await res.json()) as ChatStateDto)
+    if (!res.ok) errorText.value = res.status === 409 ? 'Conversa encerrada.' : 'Não foi possível enviar.'
+    await refreshState()
   } finally {
     isLoading.value = false
   }
@@ -144,18 +186,24 @@ function submitText() {
   send(text)
 }
 
-function selectChoice(item: ChoiceItem) {
-  send(item.content ?? '')
+function selectOption(option: { id: string; label: string }) {
+  send(option.label, option.id)
 }
+
+const bubbleClass = (m: ChatMessage) => (m.sender === 'consumer' ? 'user' : m.sender)
 
 onBeforeUnmount(() => centrifuge?.disconnect())
 
-onMounted(() => {
-  const existingId = new URL(window.location.href).searchParams.get(CHAT_QUERY_PARAM)
-  if (existingId) {
-    loadChat(existingId)
-  } else {
-    createChat()
+onMounted(async () => {
+  isLoading.value = true
+  try {
+    const token = new URL(window.location.href).searchParams.get(LINK_PARAM)
+    if (token) await loadFromLink(token)
+    else await startNew()
+  } catch {
+    errorText.value = 'Não foi possível abrir o atendimento.'
+  } finally {
+    isLoading.value = false
   }
 })
 </script>
@@ -164,7 +212,10 @@ onMounted(() => {
   <div class="wa-screen">
     <header class="wa-header">
       <div class="wa-avatar">D</div>
-      <strong class="wa-title">Duxnet</strong>
+      <div>
+        <strong class="wa-title">Duxnet</strong>
+        <small v-if="attendance" class="wa-protocol">Protocolo {{ attendance.protocolNumber }}</small>
+      </div>
     </header>
 
     <div ref="messagesEl" class="wa-messages">
@@ -172,17 +223,23 @@ onMounted(() => {
         <button class="wa-history-chip" type="button">Ver atendimentos anteriores</button>
       </div>
 
-      <div v-for="(m, i) in messages" :key="i" :class="['wa-row', m.from]">
-        <div class="wa-bubble">{{ m.text }}</div>
-      </div>
-
-      <div v-if="currentInput?.type === 'choice input'" class="wa-row bot">
-        <div class="wa-bubble wa-choices">
-          <button v-for="item in currentInput.items" :key="item.id" @click="selectChoice(item)">
-            {{ item.content }}
-          </button>
+      <template v-for="m in messages" :key="m.id">
+        <div v-if="m.content.type === 'text'" :class="['wa-row', bubbleClass(m)]">
+          <div class="wa-bubble">{{ m.content.text }}</div>
         </div>
-      </div>
+        <div v-else-if="m.content.type === 'options'" class="wa-row bot">
+          <div class="wa-bubble wa-choices">
+            <button
+              v-for="option in m.content.options"
+              :key="option.id"
+              :disabled="m.id !== activeOptionsId || isLoading"
+              @click="selectOption(option)"
+            >
+              {{ option.label }}
+            </button>
+          </div>
+        </div>
+      </template>
 
       <div v-if="pendingOperationId" class="wa-row bot">
         <div class="wa-bubble wa-typing" title="Consultando suas informações...">
@@ -198,8 +255,10 @@ onMounted(() => {
       </div>
     </div>
 
+    <p v-if="errorText" class="wa-finished">{{ errorText }}</p>
+
     <form
-      v-if="!isFinished && currentInput?.type !== 'choice input'"
+      v-if="canType"
       class="wa-composer"
       @submit.prevent="submitText"
     >
@@ -212,7 +271,7 @@ onMounted(() => {
         </svg>
         <input
           v-model="textDraft"
-          :placeholder="currentInput?.options?.labels?.placeholder ?? 'Mensagem'"
+          :placeholder="'Mensagem'"
         />
         <svg class="wa-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
@@ -236,7 +295,12 @@ onMounted(() => {
       </button>
     </form>
 
-    <p v-else-if="isFinished" class="wa-finished">Conversa encerrada.</p>
+    <div v-else-if="isFinished" class="wa-finished">
+      <p>Conversa encerrada.</p>
+      <button type="button" class="wa-new-protocol" :disabled="isLoading" @click="restart">
+        Abrir novo protocolo
+      </button>
+    </div>
   </div>
 </template>
 
@@ -472,5 +536,27 @@ onMounted(() => {
   font-size: 0.85rem;
   font-style: italic;
   background: white;
+}
+
+.wa-protocol {
+  display: block;
+  opacity: 0.85;
+  font-size: 0.72rem;
+}
+
+.wa-new-protocol {
+  margin-top: 8px;
+  padding: 10px 18px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--wa-accent, #00c896);
+  color: #fff;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.wa-choices button:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 </style>

@@ -1,5 +1,7 @@
 # POC #4 — Fundação persistente (PostgreSQL da plataforma)
 
+> **Atualização:** a integração com as POCs (etapa 5) foi feita; ver [etapa5-confiabilidade-notas.md](etapa5-confiabilidade-notas.md).
+
 > **Estado:** núcleo persistente implementado e validado por 34 testes de
 > integração contra PostgreSQL 16 real (`npm run test:int`) + smoke HTTP no
 > Docker. **Ainda não integrado** às POCs #1–#3: o chat do Typebot/Chatwoot

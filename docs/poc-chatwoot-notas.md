@@ -1,5 +1,7 @@
 # POC #3 — Handoff Typebot → Chatwoot → Typebot (pós-atendimento)
 
+> **Histórico:** o estado em memória do handoff foi substituído na etapa 5 ([etapa5-confiabilidade-notas.md](etapa5-confiabilidade-notas.md)): `human_sessions`, `integration_inbox`, outbox e recuperação de `handoff_pending`. `POST_SERVICE_INACTIVITY_MS` não existe mais (o prazo é `tenant_settings.post_service_inactivity_minutes`).
+
 > **Estado: fluxo completo VALIDADO** com Typebot 3.19.0 + Chatwoot **4.18.0**
 > (fixada) + Centrifugo 6.9.7, via `e2e` com atendente simulado pela API do
 > Chatwoot (12 checks) e 5 testes unitários. **Não validado:** uso real da UI do

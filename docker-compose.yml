@@ -226,12 +226,15 @@ services:
       CENTRIFUGO_API_URL: http://centrifugo:8000/api
       CENTRIFUGO_API_KEY: poc-api-key
       CENTRIFUGO_HMAC_SECRET: poc-hmac-secret
-      BOT_INTERNAL_SECRET: ${BOT_INTERNAL_SECRET:-}
+      # Etapa 5: assina as credenciais de execução entregues aos fluxos do Typebot (trocar em produção).
+      BOT_EXECUTION_SECRET: ${BOT_EXECUTION_SECRET:-poc-bot-execution-secret-change-me}
       OP_SIMULATED_MS: ${OP_SIMULATED_MS:-5000}
       ASYNC_RESUME_MODE: ${ASYNC_RESUME_MODE:-continue}
-      # POC #3 (valores de POC; o token é do usuário atendente@poc.local criado no seed)
+      # Seed do tenant "poc": fluxos publicados no Typebot (public IDs) e a ação do fluxo poc-async
+      # (`customer.requests.list`; use `customer.requests.fail` para exercitar a falha).
+      POC_BOT_ACTION: ${POC_BOT_ACTION:-customer.requests.list}
       TYPEBOT_POST_SERVICE_ID: ${TYPEBOT_POST_SERVICE_ID:-poc-post-service}
-      POST_SERVICE_INACTIVITY_MS: ${POST_SERVICE_INACTIVITY_MS:-3600000}
+      # Chatwoot (valores de POC; o token é do usuário atendente@poc.local criado no seed)
       CHATWOOT_API_URL: http://chatwoot-rails:3000
       CHATWOOT_ACCOUNT_ID: "1"
       CHATWOOT_INBOX_ID: "1"

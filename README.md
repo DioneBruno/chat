@@ -2,7 +2,7 @@
 
 SaaS multitenant de atendimento digital protocolado (Typebot → Chatwoot → Typebot), com NestJS como orquestrador. A especificação completa está no [CLAUDE.md](CLAUDE.md).
 
-> **Estado atual:** POC #4 (fundação persistente: protocolos, mensagens, acesso por link/OTP no PostgreSQL próprio, ver [docs/poc-fundacao-notas.md](docs/poc-fundacao-notas.md)) ainda **não integrada** às POCs abaixo. POC #2 (consulta assíncrona + Centrifugo, ver [docs/poc-async-notas.md](docs/poc-async-notas.md); validação contra o Typebot real pendente) sobre a POC #1 (validação da API do Typebot self-hosted + chat em Vue 3). O chat das POCs #1–#3 ainda guarda o histórico em memória; os módulos novos (`/public/*`) já persistem no banco `platform`.
+> **Estado atual:** etapa 5 (confiabilidade) implementada e validada: protocolos, mensagens, sessões do bot, operações assíncronas, handoff Chatwoot, outbox/inbox e realtime sobre o PostgreSQL próprio, com Typebot, Chatwoot e Centrifugo reais. Ver [docs/etapa5-confiabilidade-notas.md](docs/etapa5-confiabilidade-notas.md). As POCs em memória (`/poc/*`) foram removidas; as notas das POCs #1–#4 ficam como histórico.
 
 ## Estrutura
 
@@ -30,7 +30,7 @@ Um único comando sobe toda a infra (Typebot, Postgres, Redis, Mailpit, Centrifu
 | Serviço | URL / porta | Observação |
 |---|---|---|
 | Front (chat Vue 3) | http://localhost:5173 | |
-| API NestJS | http://localhost:3001 | Endpoints `POST /poc/chats`, `GET /poc/chats/:id`, `POST /poc/chats/:id/messages` |
+| API NestJS | http://localhost:3001 | API pública `/public/*` (chat), `/internal/bot/*` (blocos HTTP do Typebot), `/webhooks/chatwoot` |
 | Typebot builder (editor) | http://localhost:8082 | Login por magic link |
 | Typebot viewer (API de chat) | http://localhost:8081 | A API é `/api/v1/...` |
 | Centrifugo | http://localhost:8000 | |

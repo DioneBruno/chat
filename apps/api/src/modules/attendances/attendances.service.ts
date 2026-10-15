@@ -5,7 +5,8 @@ import {
   UnprocessableEntityException,
 } from '@nestjs/common';
 import { PoolClient } from 'pg';
-import { DatabaseService } from '../../database/database.service';
+import { DatabaseService, Queryable } from '../../database/database.service';
+import { OutboxService } from '../outbox/outbox.service';
 import { TenantsService } from '../tenants/tenants.service';
 
 export type AttendanceStatus = 'open' | 'closed' | 'expired';
@@ -52,6 +53,22 @@ export const PHASE_TRANSITIONS: Record<AttendancePhase, AttendancePhase[]> = {
   post_service: ['bot', 'handoff_pending'],
 };
 
+export interface TransitionInput {
+  tenantId: string;
+  id: string;
+  to: AttendancePhase;
+  expectedVersion: number;
+  inactivityDeadlineAt?: Date | null;
+}
+
+export interface CloseInput {
+  tenantId: string;
+  id: string;
+  reason: string;
+  by: Actor;
+  status?: 'closed' | 'expired';
+}
+
 /** Único serviço autorizado a alterar status/fase de um atendimento (seção 9). */
 @Injectable()
 export class AttendancesService {
@@ -61,6 +78,7 @@ export class AttendancesService {
   constructor(
     private readonly db: DatabaseService,
     private readonly tenants: TenantsService,
+    private readonly outbox: OutboxService,
   ) {}
 
   /**
@@ -126,6 +144,13 @@ export class AttendancesService {
         'INSERT INTO conversations (tenant_id, attendance_id) VALUES ($1, $2)',
         [input.tenantId, rows[0].id],
       );
+      // Todo atendimento começa no Typebot (seção 5): o worker inicia a sessão inicial.
+      await this.outbox.enqueue(client, {
+        tenantId: input.tenantId,
+        attendanceId: rows[0].id,
+        type: 'attendance.created',
+        dedupeKey: `attendance.created:${rows[0].id}`,
+      });
       return { attendance: rows[0], created: true };
     });
   }
@@ -149,12 +174,44 @@ export class AttendancesService {
   }
 
   async get(tenantId: string, id: string): Promise<Attendance> {
-    const { rows } = await this.db.query<Attendance>(
+    return this.getIn(this.db, tenantId, id);
+  }
+
+  async getIn(q: Queryable, tenantId: string, id: string): Promise<Attendance> {
+    const { rows } = await q.query<Attendance>(
       `SELECT ${COLUMNS} FROM attendances WHERE tenant_id = $1 AND id = $2`,
       [tenantId, id],
     );
     if (!rows[0]) throw new NotFoundException('atendimento não encontrado');
     return rows[0];
+  }
+
+  /**
+   * Estado do chat para o front reconectar sem perder o contexto: operação em andamento
+   * e o que se espera do consumidor (o banco é a fonte da verdade; o realtime é só sinal).
+   */
+  async chatState(tenantId: string, attendanceId: string) {
+    const [session, operation] = await Promise.all([
+      this.db.query<{ status: string; pendingInput: { type: string } | null }>(
+        `SELECT status, pending_input AS "pendingInput" FROM bot_sessions
+          WHERE tenant_id = $1 AND attendance_id = $2 AND status IN ('starting', 'active', 'waiting_operation')`,
+        [tenantId, attendanceId],
+      ),
+      this.db.query<{ id: string; status: string }>(
+        `SELECT id, status FROM bot_operations
+          WHERE tenant_id = $1 AND attendance_id = $2
+            AND (status IN ('pending', 'processing') OR (status IN ('completed', 'failed') AND resume_status IS NULL))
+          ORDER BY created_at DESC LIMIT 1`,
+        [tenantId, attendanceId],
+      ),
+    ]);
+    const s = session.rows[0];
+    return {
+      pendingOperation: operation.rows[0]
+        ? { id: operation.rows[0].id, status: operation.rows[0].status }
+        : null,
+      expecting: s?.status === 'active' ? (s.pendingInput?.type ?? null) : null,
+    };
   }
 
   async getConversationId(
@@ -173,14 +230,16 @@ export class AttendancesService {
    * Muda a fase com controle otimista (`expectedVersion`). Entrar em
    * `awaiting_business_hours` suspende o prazo de inatividade (seção 7).
    */
-  async transitionPhase(input: {
-    tenantId: string;
-    id: string;
-    to: AttendancePhase;
-    expectedVersion: number;
-    inactivityDeadlineAt?: Date | null;
-  }): Promise<Attendance> {
-    const current = await this.get(input.tenantId, input.id);
+  transitionPhase(input: TransitionInput): Promise<Attendance> {
+    return this.db.tx((client) => this.transitionPhaseIn(client, input));
+  }
+
+  /** Versão para compor com outras escritas na transação do chamador (orquestrador). */
+  async transitionPhaseIn(
+    q: Queryable,
+    input: TransitionInput,
+  ): Promise<Attendance> {
+    const current = await this.getIn(q, input.tenantId, input.id);
     if (current.status !== 'open')
       throw new ConflictException('atendimento encerrado');
     if (!PHASE_TRANSITIONS[current.phase].includes(input.to)) {
@@ -194,7 +253,7 @@ export class AttendancesService {
         : input.inactivityDeadlineAt === undefined
           ? current.inactivityDeadlineAt
           : input.inactivityDeadlineAt;
-    const { rows } = await this.db.query<Attendance>(
+    const { rows } = await q.query<Attendance>(
       `UPDATE attendances SET phase = $4, inactivity_deadline_at = $5, state_version = state_version + 1
         WHERE tenant_id = $1 AND id = $2 AND status = 'open' AND state_version = $3 AND phase = $6
         RETURNING ${COLUMNS}`,
@@ -211,18 +270,32 @@ export class AttendancesService {
       throw new ConflictException(
         'estado do atendimento mudou; recarregue e tente de novo',
       );
+    await this.signalUpdated(q, rows[0]);
     return rows[0];
   }
 
+  /**
+   * Define o prazo de inatividade sem mudar a fase (ex.: pergunta de pós-atendimento
+   * entregue). Condicional à versão: não pisa numa mudança concorrente.
+   */
+  async setDeadlineIn(
+    q: Queryable,
+    input: { tenantId: string; id: string; deadline: Date | null },
+  ) {
+    await q.query(
+      `UPDATE attendances SET inactivity_deadline_at = $3
+        WHERE tenant_id = $1 AND id = $2 AND status = 'open'`,
+      [input.tenantId, input.id, input.deadline],
+    );
+  }
+
   /** Encerra de forma condicional/idempotente: retorna `null` se já não estava aberto. */
-  async close(input: {
-    tenantId: string;
-    id: string;
-    reason: string;
-    by: Actor;
-    status?: 'closed' | 'expired';
-  }) {
-    const { rows } = await this.db.query<Attendance>(
+  close(input: CloseInput) {
+    return this.db.tx((client) => this.closeIn(client, input));
+  }
+
+  async closeIn(q: Queryable, input: CloseInput) {
+    const { rows } = await q.query<Attendance>(
       `UPDATE attendances
           SET status = $3, closed_reason = $4, closed_by = $5, closed_at = now(),
               inactivity_deadline_at = NULL, state_version = state_version + 1
@@ -236,6 +309,7 @@ export class AttendancesService {
         input.by,
       ],
     );
+    if (rows[0]) await this.onTerminal(q, rows[0]);
     return rows[0] ?? null;
   }
 
@@ -245,8 +319,16 @@ export class AttendancesService {
    * corrida com a resposta do consumidor (que zera/renova o prazo na mesma linha).
    * Atendimentos em `awaiting_business_hours` nunca expiram.
    */
-  async expireDue(limit = 100): Promise<Attendance[]> {
-    const { rows } = await this.db.query<Attendance>(
+  expireDue(limit = 100): Promise<Attendance[]> {
+    return this.db.tx(async (client) => {
+      const rows = await this.expireDueIn(client, limit);
+      for (const row of rows) await this.onTerminal(client, row);
+      return rows;
+    });
+  }
+
+  private async expireDueIn(q: Queryable, limit: number) {
+    const { rows } = await q.query<Attendance>(
       `UPDATE attendances
           SET status = 'expired', closed_by = 'system', closed_at = now(), inactivity_deadline_at = NULL,
               closed_reason = CASE WHEN phase = 'post_service' THEN 'post_service_inactivity' ELSE 'inactivity' END,
@@ -260,6 +342,41 @@ export class AttendancesService {
       [this.clock(), limit],
     );
     return rows;
+  }
+
+  /**
+   * Efeitos do encerramento (evento `attendance.closed`, seção 12), na mesma transação:
+   * cancela operações, interrompe sessões do bot/humano e sinaliza o realtime.
+   * Resultados tardios de operações canceladas são descartados pelo worker.
+   */
+  private async onTerminal(q: Queryable, a: Attendance) {
+    await q.query(
+      `UPDATE bot_operations SET status = 'cancelled', completed_at = now(), lease_expires_at = NULL
+        WHERE tenant_id = $1 AND attendance_id = $2 AND status IN ('pending', 'processing')`,
+      [a.tenantId, a.id],
+    );
+    await q.query(
+      `UPDATE bot_sessions SET status = 'interrupted', pending_input = NULL, ended_at = now(),
+              state_version = state_version + 1, updated_at = now()
+        WHERE tenant_id = $1 AND attendance_id = $2 AND status IN ('starting', 'active', 'waiting_operation')`,
+      [a.tenantId, a.id],
+    );
+    await q.query(
+      `UPDATE human_sessions SET status = 'ended', end_reason = $3, ended_at = now()
+        WHERE tenant_id = $1 AND attendance_id = $2 AND status IN ('pending', 'active')`,
+      [a.tenantId, a.id, `attendance_${a.status}`],
+    );
+    await this.signalUpdated(q, a);
+  }
+
+  private signalUpdated(q: Queryable, a: Attendance) {
+    return this.outbox.enqueue(q, {
+      tenantId: a.tenantId,
+      attendanceId: a.id,
+      type: 'realtime.publish',
+      payload: { event: 'attendance.updated' },
+      dedupeKey: `attendance.updated:${a.id}:${a.stateVersion}`,
+    });
   }
 
   private yearIn(timeZone: string) {
