@@ -31,14 +31,14 @@ Um único comando sobe toda a infra (Typebot, Postgres, Redis, Mailpit, Centrifu
 |---|---|---|
 | Front (chat Vue 3) | http://localhost:5173 | |
 | API NestJS | http://localhost:3001 | Endpoints `POST /poc/chats`, `GET /poc/chats/:id`, `POST /poc/chats/:id/messages` |
-| Typebot builder (editor) | http://localhost:8080 | Login por magic link |
+| Typebot builder (editor) | http://localhost:8082 | Login por magic link |
 | Typebot viewer (API de chat) | http://localhost:8081 | A API é `/api/v1/...` |
 | Centrifugo | http://localhost:8000 | |
 | Mailpit (SMTP descartável) | http://localhost:8025 | Receba aqui o magic link de login |
 
 ### Configurar o Typebot (primeira vez)
 
-1. Abra http://localhost:8080, informe `admin@poc.local` (valor de `ADMIN_EMAIL`) e abra o link recebido no Mailpit.
+1. Abra http://localhost:8082, informe `admin@poc.local` (valor de `ADMIN_EMAIL`) e abra o link recebido no Mailpit.
 2. Crie e **publique** um fluxo simples (boas-vindas → input → escolha → mensagem final).
 3. Copie o **public ID** do fluxo publicado (`TYPEBOT_ID`).
 4. Em *Configurações da conta → API tokens*, crie um token (`TYPEBOT_API_TOKEN`).

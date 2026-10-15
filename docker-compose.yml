@@ -14,11 +14,11 @@ x-typebot-common: &typebot-common
   networks:
     - platform-network
   environment: &typebot-env
-    ENCRYPTION_SECRET: ${ENCRYPTION_SECRET:-poc-encryption-secret-0123456789ab}
+    ENCRYPTION_SECRET: ${ENCRYPTION_SECRET:-poc-encryption-secret-0123456789}
     DATABASE_URL: postgresql://postgres:typebot@typebot-db:5432/typebot
     REDIS_URL: redis://typebot-redis:6379
     NODE_OPTIONS: --no-node-snapshot
-    NEXTAUTH_URL: http://localhost:8080
+    NEXTAUTH_URL: http://localhost:8082
     NEXT_PUBLIC_VIEWER_URL: http://localhost:8081
     ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@poc.local}
     # Login por magic link via Mailpit. Com SMTP_AUTH_DISABLED=true o login por e-mail é desativado.
@@ -64,7 +64,7 @@ services:
     <<: *typebot-common
     image: baptistearno/typebot-builder:3.19.0
     ports:
-      - "8080:3000"
+      - "8082:3000"
 
   typebot-viewer:
     <<: *typebot-common
