@@ -151,9 +151,19 @@ export class BotOperationsPocService implements OnModuleInit, OnModuleDestroy {
     const chat = this.store.get(op.chatId);
     if (!chat || chat.pendingOperationId !== op.id) return;
     chat.pendingOperationId = null;
-    chat.messages.push({ from: 'bot', text: 'Não consegui consultar suas informações agora. Tente novamente mais tarde.' });
-    // O fluxo do Typebot continua parado no input de retomada; reabrir o input
-    // para o consumidor é decisão do fluxo real (ver docs).
+    const text = 'Não consegui consultar suas informações agora. Tente novamente mais tarde.';
+    if (this.resumeMode === 'continue') {
+      // O fluxo está parado no input de retomada: sem avançá-lo o consumidor
+      // ficaria preso. Na versão real o fluxo ramifica por uma variável de status.
+      try {
+        this.store.applyTurn(chat, await this.client.continueChat(chat.typebotSessionId, text));
+      } catch (e) {
+        this.logger.error(`continueChat (falha) falhou: ${(e as Error).message}`);
+        chat.messages.push({ from: 'bot', text });
+      }
+    } else {
+      chat.messages.push({ from: 'bot', text });
+    }
     await this.realtime.publish(op.chatId, 'bot.operation.failed', { operationId: op.id });
     await this.realtime.publish(op.chatId, 'message.created');
   }

@@ -27,6 +27,36 @@ x-typebot-common: &typebot-common
     SMTP_SECURE: "false"
     SMTP_AUTH_DISABLED: "false"
     NEXT_PUBLIC_SMTP_FROM: "Typebot POC <notifications@poc.local>"
+x-chatwoot-common: &chatwoot-common
+  image: chatwoot/chatwoot:v4.18.0
+  restart: unless-stopped
+  depends_on:
+    chatwoot-db:
+      condition: service_healthy
+    chatwoot-redis:
+      condition: service_healthy
+  networks:
+    - platform-network
+  environment:
+    RAILS_ENV: production
+    NODE_ENV: production
+    INSTALLATION_ENV: docker
+    SECRET_KEY_BASE: ${CHATWOOT_SECRET_KEY_BASE:-poc-chatwoot-secret-key-base-0123456789abcdef0123456789abcdef0123456789abcdef}
+    FRONTEND_URL: http://localhost:3000
+    POSTGRES_HOST: chatwoot-db
+    POSTGRES_DATABASE: chatwoot
+    POSTGRES_USERNAME: postgres
+    POSTGRES_PASSWORD: chatwoot
+    REDIS_URL: redis://chatwoot-redis:6379
+    ENABLE_ACCOUNT_SIGNUP: "false"
+    MAILER_SENDER_EMAIL: Chatwoot POC <chatwoot@poc.local>
+    SMTP_ADDRESS: mailpit
+    SMTP_PORT: "1025"
+    SMTP_AUTHENTICATION: ""
+    SMTP_ENABLE_STARTTLS_AUTO: "false"
+    LOG_LEVEL: info
+    # POC: o Sidekiq precisa entregar webhooks ao Nest na rede docker (hostname "api"). A chave é global (não há allowlist por host).
+    SAFE_FETCH_ALLOW_PRIVATE_NETWORK: "true"
 
 services:
   typebot-db:
@@ -76,6 +106,49 @@ services:
     environment:
       <<: *typebot-env
       SSRF_ALLOWED_HOSTS: api
+
+  # --- POC #3: Chatwoot v4.18.0 (painel do atendente) em http://localhost:3000 ---
+  # Banco e Redis próprios: não compartilha dados com Typebot nem com a plataforma.
+  chatwoot-db:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    volumes:
+      - chatwoot-db-data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: chatwoot
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: chatwoot
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - platform-network
+
+  chatwoot-redis:
+    image: redis:alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - chatwoot-redis-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
+      interval: 10s
+      retries: 5
+    networks:
+      - platform-network
+
+  chatwoot-rails:
+    <<: *chatwoot-common
+    entrypoint: docker/entrypoints/rails.sh
+    command: ["bundle", "exec", "rails", "s", "-p", "3000", "-b", "0.0.0.0"]
+    ports:
+      - "3000:3000"
+
+  chatwoot-sidekiq:
+    <<: *chatwoot-common
+    command: ["bundle", "exec", "sidekiq", "-C", "config/sidekiq.yml"]
 
   # SMTP descartável só para capturar o magic link de login do builder.
   # UI web em http://localhost:8025
@@ -128,6 +201,14 @@ services:
       BOT_INTERNAL_SECRET: ${BOT_INTERNAL_SECRET:-}
       OP_SIMULATED_MS: ${OP_SIMULATED_MS:-5000}
       ASYNC_RESUME_MODE: ${ASYNC_RESUME_MODE:-continue}
+      # POC #3 (valores de POC; o token é do usuário atendente@poc.local criado no seed)
+      TYPEBOT_POST_SERVICE_ID: ${TYPEBOT_POST_SERVICE_ID:-poc-post-service}
+      POST_SERVICE_INACTIVITY_MS: ${POST_SERVICE_INACTIVITY_MS:-3600000}
+      CHATWOOT_API_URL: http://chatwoot-rails:3000
+      CHATWOOT_ACCOUNT_ID: "1"
+      CHATWOOT_INBOX_ID: "1"
+      CHATWOOT_API_TOKEN: ${CHATWOOT_API_TOKEN:-f4Yid8AzhGiq9v1oNoUZu25J}
+      CHATWOOT_WEBHOOK_SECRET: ${CHATWOOT_WEBHOOK_SECRET:-mC59WRiiy5fTpqVL5oYW4zNJ}
     networks:
       - platform-network
 
@@ -149,3 +230,5 @@ networks:
 volumes:
   db-data:
   redis-data:
+  chatwoot-db-data:
+  chatwoot-redis-data:

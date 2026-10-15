@@ -18,7 +18,7 @@ const API_URL = 'http://localhost:3001'
 const CENTRIFUGO_WS_URL = 'ws://localhost:8000/connection/websocket'
 const CHAT_QUERY_PARAM = 'chat'
 
-type ChatMessage = { from: 'bot' | 'user'; text: string }
+type ChatMessage = { from: 'bot' | 'user' | 'agent' | 'system'; text: string }
 type ChoiceItem = { id: string; content?: string }
 type BotInput = {
   type: string
@@ -300,8 +300,12 @@ onMounted(() => {
 .wa-row {
   display: flex;
 }
-.wa-row.bot {
+.wa-row.bot,
+.wa-row.agent {
   justify-content: flex-start;
+}
+.wa-row.system {
+  justify-content: center;
 }
 .wa-row.user {
   justify-content: flex-end;
@@ -335,6 +339,17 @@ onMounted(() => {
 .wa-row.bot .wa-bubble {
   background: var(--wa-bubble-in);
   border-top-left-radius: 0;
+}
+.wa-row.agent .wa-bubble {
+  background: #e3f2fd;
+  border-top-left-radius: 0;
+}
+.wa-row.system .wa-bubble {
+  background: rgba(255, 255, 255, 0.7);
+  color: var(--wa-text);
+  font-size: 0.78rem;
+  max-width: 90%;
+  text-align: center;
 }
 .wa-row.user .wa-bubble {
   background: var(--wa-bubble-out);

@@ -44,8 +44,11 @@ export class TypebotPocClient {
   private readonly apiToken = process.env.TYPEBOT_API_TOKEN ?? '';
 
   /** `prefilledVariables` expõe o chatId ao fluxo (usado pelo bloco HTTP da POC #2). */
-  async startChat(prefilledVariables: Record<string, string> = {}): Promise<TypebotTurnResult> {
-    const response = await fetch(`${this.apiUrl}/v1/typebots/${this.typebotId}/startChat`, {
+  async startChat(
+    prefilledVariables: Record<string, string> = {},
+    typebotId: string = this.typebotId,
+  ): Promise<TypebotTurnResult> {
+    const response = await fetch(`${this.apiUrl}/v1/typebots/${typebotId}/startChat`, {
       method: 'POST',
       headers: this.headers(),
       body: JSON.stringify({ prefilledVariables }),

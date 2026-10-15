@@ -36,6 +36,11 @@ Achados que viraram correção:
   preenchido depois. No desenho real, criar `bot_sessions` antes de iniciar.
 - Chat inexistente/encerrado no endpoint interno agora é 409 (era 500).
 
+> **Atenção (descoberto na POC #3):** o bloco HTTP do Typebot só envia o corpo
+> configurado com `options.isCustomBody: true`; sem isso `action` não chega ao
+> Nest. O caminho de falha (`fail()` avançando o fluxo + variável `acao`) está
+> escrito mas **não foi testado**.
+
 ## Fluxo a montar no builder (publicar e usar o public ID em `TYPEBOT_ID`)
 
 1. Variáveis: `chatId` (preenchida via `prefilledVariables` no startChat),
