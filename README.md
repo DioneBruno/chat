@@ -22,7 +22,7 @@ docs/           Notas das POCs
 ## Como subir
 
 ```bash
-docker compose up -d --build
+docker compose -p chat up --build --force-recreate
 ```
 
 Um único comando sobe toda a infra (Typebot, Postgres, Redis, Mailpit, Centrifugo, API e front). Não é preciso `.env` para a primeira subida; para sobrescrever defaults copie `.env.example` para `.env`.
