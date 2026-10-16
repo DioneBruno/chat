@@ -12,7 +12,7 @@
 
 - Banco `platform` (serviço `platform-db`, usuário/credenciais próprios, porta
   `127.0.0.1:5434` só para dev/testes), separado do Typebot e do Chatwoot.
-- Migrations SQL em `apps/api/src/database/migrations`, aplicadas na subida com
+- Migrations SQL em `apps/api/src/@modules/shared/database/migrations`, aplicadas na subida com
   advisory lock (seguro com mais de uma réplica). SQL puro com `pg`, sem ORM.
 - Tabelas: `tenants`, `tenant_settings` (pós-atendimento **60 min** padrão),
   `applications`, `consumers`, `consumer_identities`, `attendance_counters`,

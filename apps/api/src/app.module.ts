@@ -1,13 +1,15 @@
 import { Module } from '@nestjs/common';
+import { APP_FILTER } from '@nestjs/core';
+import { ErroAplicacaoFilter } from '@http/shared/erroAplicacao.filter';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
-import { DatabaseModule } from './database/database.module';
-import { AttendancesModule } from './modules/attendances/attendances.module';
-import { BotModule } from './modules/bot/bot.module';
-import { BotOperationsModule } from './modules/bot-operations/bot-operations.module';
-import { HumanSupportModule } from './modules/human-support/human-support.module';
-import { OutboxModule } from './modules/outbox/outbox.module';
-import { RealtimeModule } from './modules/realtime/realtime.module';
+import { DatabaseModule } from '@http/database/database.module';
+import { AttendancesModule } from '@http/attendances/attendances.module';
+import { BotModule } from '@http/bot/bot.module';
+import { BotOperationsModule } from '@http/botOperations/botOperations.module';
+import { HumanSupportModule } from '@http/humanSupport/humanSupport.module';
+import { OutboxModule } from '@http/outbox/outbox.module';
+import { RealtimeModule } from '@http/realtime/realtime.module';
 
 @Module({
   imports: [
@@ -20,6 +22,9 @@ import { RealtimeModule } from './modules/realtime/realtime.module';
     HumanSupportModule,
   ],
   controllers: [AppController],
-  providers: [AppService],
+  providers: [
+    AppService,
+    { provide: APP_FILTER, useClass: ErroAplicacaoFilter },
+  ],
 })
 export class AppModule {}
