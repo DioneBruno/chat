@@ -110,21 +110,16 @@ services:
   # --- POC #4: banco da plataforma (NestJS), separado do Typebot e do Chatwoot ---
   platform-db:
     image: postgres:16
+    container_name: chat-api-database
     restart: unless-stopped
     volumes:
       - platform-db-data:/var/lib/postgresql/data
     environment:
       POSTGRES_DB: platform
-      POSTGRES_USER: platform
-      POSTGRES_PASSWORD: ${PLATFORM_DB_PASSWORD:-platform}
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U platform -d platform"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-    # Publicada só para testes de integração/desenvolvimento local.
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
     ports:
-      - "127.0.0.1:5434:5432"
+      - "5434:5432"
     networks:
       - platform-network
 
